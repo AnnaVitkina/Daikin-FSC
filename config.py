@@ -8,6 +8,7 @@ COLAB_DRIVE_ROOT = Path(
     "/Documents/AI Adoption RMT/RMT_Daikin/RMT_FSC"
 )
 CODE_FOLDER_NAME = "Daikin-FSC"
+LOCAL_COLAB_CODE_DIR = Path("/content/Daikin-FSC")
 
 
 def is_colab() -> bool:
@@ -19,21 +20,55 @@ def is_colab() -> bool:
         return False
 
 
-def get_code_dir() -> Path:
-    if is_colab():
-        return COLAB_DRIVE_ROOT / CODE_FOLDER_NAME
+def find_code_dir() -> Path:
+    """Locate the folder that contains the Daikin-FSC Python modules."""
+    candidates: list[Path] = []
 
-    return Path(__file__).resolve().parent
+    try:
+        candidates.append(Path(__file__).resolve().parent)
+    except NameError:
+        pass
+
+    candidates.extend(
+        [
+            LOCAL_COLAB_CODE_DIR,
+            COLAB_DRIVE_ROOT / CODE_FOLDER_NAME,
+            Path.cwd(),
+            Path.cwd() / CODE_FOLDER_NAME,
+        ]
+    )
+
+    seen: set[str] = set()
+    for candidate in candidates:
+        candidate_str = str(candidate)
+        if candidate_str in seen:
+            continue
+        seen.add(candidate_str)
+
+        if (candidate / "config.py").exists():
+            return candidate
+
+    raise ModuleNotFoundError(
+        "Could not locate the Daikin-FSC code folder. "
+        "Expected config.py in /content/Daikin-FSC or on Google Drive under RMT_FSC/Daikin-FSC."
+    )
 
 
 def get_workspace_root() -> Path:
     if is_colab():
-        return COLAB_DRIVE_ROOT
+        if COLAB_DRIVE_ROOT.exists():
+            return COLAB_DRIVE_ROOT
 
-    return Path(__file__).resolve().parent
+        code_dir = find_code_dir()
+        if code_dir.name == CODE_FOLDER_NAME and (code_dir.parent / "input").exists():
+            return code_dir.parent
+
+        return code_dir
+
+    return find_code_dir()
 
 
-CODE_DIR = get_code_dir()
+CODE_DIR = find_code_dir()
 WORKSPACE_ROOT = get_workspace_root()
 
 INPUT_DIR = WORKSPACE_ROOT / "input" / "fsc file"
@@ -43,13 +78,18 @@ CALCULATION_BASIS_DIR = WORKSPACE_ROOT / "input" / "rules" / "rules"
 ORIGINAL_FILE_DIR = WORKSPACE_ROOT / "input" / "rules" / "original file"
 
 
-def setup_paths(code_dir: Path | None = None) -> Path:
-    """Add the code folder to sys.path for Colab and local runs."""
-    folder = code_dir or CODE_DIR
+def bootstrap_sys_path(code_dir: Path | None = None) -> Path:
+    """Add the code folder to sys.path before importing local modules."""
+    folder = code_dir or find_code_dir()
     folder_str = str(folder)
     if folder_str not in sys.path:
         sys.path.insert(0, folder_str)
     return folder
+
+
+def setup_paths(code_dir: Path | None = None) -> Path:
+    """Backwards-compatible alias for bootstrap_sys_path."""
+    return bootstrap_sys_path(code_dir)
 
 
 def ensure_workspace_dirs() -> None:
