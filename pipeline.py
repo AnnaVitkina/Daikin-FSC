@@ -89,7 +89,12 @@ from fsc_prices_processor import (
     parse_target_month,
     process_fsc_file,
 )
-from rate_card_updater import find_rate_card_export, update_rate_card_export
+from rate_card_updater import (
+    choose_rate_card_period,
+    find_rate_card_export,
+    parse_rate_card_period,
+    update_rate_card_export,
+)
 
 
 @dataclass
@@ -120,6 +125,7 @@ def run_pipeline(
     rate_card_path: Path | None = None,
     processing_dir: Path | None = None,
     output_dir: Path | None = None,
+    period_halves: set[str] | None = None,
 ) -> PipelineResult:
     """
     Run the full FSC Matrix pipeline end to end.
@@ -157,6 +163,14 @@ def run_pipeline(
     print(f"Calculation basis:    {basis_file.name}")
     print(f"Rate card source:     {rate_card_file.name}")
     print(f"Files to process:     {len(fsc_files)}")
+
+    selected_periods = period_halves or choose_rate_card_period()
+    if selected_periods == {"first"}:
+        print("Rate card period:     01 to 15")
+    elif selected_periods == {"second"}:
+        print("Rate card period:     16 to last day of month")
+    else:
+        print("Rate card period:     Both halves")
 
     file_results: list[FilePipelineResult] = []
 
@@ -196,6 +210,7 @@ def run_pipeline(
             rate_card_path=rate_card_file,
             fsc_input_path=fsc_input,
             output_dir=output_dir,
+            period_halves=selected_periods,
         )
         print(f"Updated rows: {updated_rows}")
         print(f"Saved to: {rate_card_output}")
@@ -239,6 +254,7 @@ def default_cli_args() -> argparse.Namespace:
         rate_card=None,
         processing_dir=None,
         output_dir=None,
+        period=None,
     )
 
 
@@ -286,11 +302,17 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         type=Path,
         help="Folder where final FSC files will be saved.",
     )
+    parser.add_argument(
+        "--period",
+        choices=("first", "second", "both"),
+        help="Rate card period to update: first (01-15), second (16-end), or both.",
+    )
     return parser.parse_args(argv)
 
 
 def main() -> None:
     args = parse_args()
+    period_halves = parse_rate_card_period(args.period) if args.period else None
 
     if args.input is None:
         run_pipeline(
@@ -298,6 +320,7 @@ def main() -> None:
             rate_card_path=args.rate_card,
             processing_dir=args.processing_dir,
             output_dir=args.output_dir,
+            period_halves=period_halves,
         )
         return
 
@@ -321,6 +344,7 @@ def main() -> None:
         rate_card_path=args.rate_card,
         processing_dir=args.processing_dir,
         output_dir=args.output_dir,
+        period_halves=period_halves,
     )
 
 
