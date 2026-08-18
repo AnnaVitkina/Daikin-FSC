@@ -17,6 +17,8 @@ RATE_CARD_FILENAME = "Rate card export.xlsx"
 FSC_SHEET_WITH_TAXES = "Prices with taxes"
 FSC_SHEET_WO_TAXES = "Prices wo taxes"
 ROTALIS_PT_MARKER = "rotalis pt"
+FUEL_SURCHARGE_MARKER = "fuel surcharge"
+EXPECTED_RATE_CARD_TABS = 5
 
 COL_LANE = 1
 COL_PERCENT = 2
@@ -136,6 +138,35 @@ def sheet_uses_wo_taxes(sheet_name: str) -> bool:
     return ROTALIS_PT_MARKER in sheet_name.casefold()
 
 
+def is_fuel_surcharge_sheet(sheet_name: str) -> bool:
+    normalized = sheet_name.casefold().replace("-", " ").replace("_", " ")
+    return FUEL_SURCHARGE_MARKER in normalized
+
+
+def get_rate_card_worksheets(workbook) -> list[Worksheet]:
+    """Return all Fuel Surcharge tabs that should be updated."""
+    worksheets = [
+        worksheet
+        for worksheet in workbook.worksheets
+        if is_fuel_surcharge_sheet(worksheet.title)
+    ]
+
+    if len(worksheets) < EXPECTED_RATE_CARD_TABS:
+        found = [worksheet.title for worksheet in worksheets]
+        raise ValueError(
+            "Rate card export must contain 5 Fuel Surcharge tabs "
+            f"({EXPECTED_RATE_CARD_TABS} expected, found {len(worksheets)}): {found}"
+        )
+
+    return worksheets
+
+
+def describe_fsc_source(sheet_name: str) -> str:
+    if sheet_uses_wo_taxes(sheet_name):
+        return FSC_SHEET_WO_TAXES
+    return FSC_SHEET_WITH_TAXES
+
+
 def choose_fsc_lookup_for_sheet(
     sheet_name: str,
     lookup_with_taxes: dict[tuple[str, str], float],
@@ -188,16 +219,17 @@ def derive_rate_card_output_name(
 ) -> str:
     """Derive the output filename from the original FSC input file."""
     if fsc_input_path is not None:
-        return fsc_input_path.name
+        stem = fsc_input_path.stem
+    else:
+        match = FSC_OUTPUT_NAME_PATTERN.match(fsc_output_path.stem)
+        if match:
+            stem = match.group("name")
+        elif fsc_output_path.stem.endswith("_fsc"):
+            stem = fsc_output_path.stem[:-4]
+        else:
+            stem = fsc_output_path.stem
 
-    match = FSC_OUTPUT_NAME_PATTERN.match(fsc_output_path.stem)
-    if match:
-        return f"{match.group('name')}.xlsx"
-
-    if fsc_output_path.stem.endswith("_fsc"):
-        return f"{fsc_output_path.stem[:-4]}.xlsx"
-
-    return f"{fsc_output_path.stem}.xlsx"
+    return f"{stem} result.xlsx"
 
 
 def period_half_for_date(value: date) -> str:
@@ -282,9 +314,14 @@ def get_cell_text(value: object) -> str | None:
 def is_lane_header_row(worksheet: Worksheet, row_index: int) -> bool:
     applies_header = get_cell_text(worksheet.cell(row_index, COL_APPLIES).value)
     percent_header = get_cell_text(worksheet.cell(row_index, COL_PERCENT).value)
-    return applies_header == "Applies if" and bool(
-        percent_header and "over cost" in percent_header.casefold()
-    )
+    if applies_header != "Applies if":
+        return False
+
+    if not percent_header:
+        return False
+
+    normalized_header = percent_header.casefold().replace("-", " ").replace("_", " ")
+    return "over cost" in normalized_header
 
 
 def find_lane_header_rows(worksheet: Worksheet) -> list[int]:
@@ -453,7 +490,7 @@ def update_rate_card_export(
     rate_card_path: Path | None = None,
     fsc_input_path: Path | None = None,
     output_dir: Path | None = None,
-) -> tuple[Path, int]:
+) -> tuple[Path, int, dict[str, int]]:
     """Update % over cost values in a copy of the rate card export."""
     source_rate_card = rate_card_path or find_rate_card_export()
     lookup_with_taxes, lookup_wo_taxes, month, year = load_fsc_lookups(fsc_output_path)
@@ -466,22 +503,29 @@ def update_rate_card_export(
 
     workbook = load_workbook(output_path)
     updated_rows = 0
+    updates_by_sheet: dict[str, int] = {}
 
-    for worksheet in workbook.worksheets:
+    for worksheet in get_rate_card_worksheets(workbook):
         fsc_lookup = choose_fsc_lookup_for_sheet(
             worksheet.title,
             lookup_with_taxes,
             lookup_wo_taxes,
         )
-        updated_rows += update_worksheet_lanes(
+        sheet_updates = update_worksheet_lanes(
             worksheet,
             fsc_lookup=fsc_lookup,
             month=month,
             year=year,
         )
+        updates_by_sheet[worksheet.title] = sheet_updates
+        updated_rows += sheet_updates
+        print(
+            f"  {worksheet.title}: {sheet_updates} rows "
+            f"({describe_fsc_source(worksheet.title)})"
+        )
 
     workbook.save(output_path)
-    return output_path, updated_rows
+    return output_path, updated_rows, updates_by_sheet
 
 
 def run_rate_card_updater(
@@ -489,14 +533,14 @@ def run_rate_card_updater(
     rate_card_path: Path | None = None,
     fsc_input_path: Path | None = None,
     output_dir: Path | None = None,
-) -> tuple[Path, int]:
+) -> tuple[Path, int, dict[str, int]]:
     selected_fsc_output = fsc_output_path or choose_fsc_output_file()
     source_rate_card = rate_card_path or find_rate_card_export()
 
     print(f"\nUsing FSC output:     {selected_fsc_output.name}")
     print(f"Using rate card:      {source_rate_card.name}")
 
-    output_path, updated_rows = update_rate_card_export(
+    output_path, updated_rows, updates_by_sheet = update_rate_card_export(
         fsc_output_path=selected_fsc_output,
         rate_card_path=source_rate_card,
         fsc_input_path=fsc_input_path,
@@ -505,7 +549,7 @@ def run_rate_card_updater(
 
     print(f"Updated rows:         {updated_rows}")
     print(f"Saved to:             {output_path}")
-    return output_path, updated_rows
+    return output_path, updated_rows, updates_by_sheet
 
 
 def parse_args() -> argparse.Namespace:
