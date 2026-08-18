@@ -1,13 +1,56 @@
 from __future__ import annotations
 
 import argparse
+import sys
 from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
 
-from config import INPUT_DIR, setup_paths
 
-setup_paths()
+def _bootstrap_before_imports() -> None:
+    """Allow exec(open('pipeline.py')) in Colab to find local modules."""
+    candidates: list[Path] = []
+
+    try:
+        candidates.append(Path(__file__).resolve().parent)
+    except NameError:
+        pass
+
+    candidates.extend(
+        [
+            Path("/content/Daikin-FSC"),
+            Path(
+                "/content/drive/Shareddrives/FA Ops Europe: Rate Maintenance Team "
+                "/Documents/AI Adoption RMT/RMT_Daikin/RMT_FSC/Daikin-FSC"
+            ),
+            Path.cwd(),
+            Path.cwd() / "Daikin-FSC",
+        ]
+    )
+
+    seen: set[str] = set()
+    for candidate in candidates:
+        candidate_str = str(candidate)
+        if candidate_str in seen:
+            continue
+        seen.add(candidate_str)
+
+        if (candidate / "config.py").exists():
+            if candidate_str not in sys.path:
+                sys.path.insert(0, candidate_str)
+            return
+
+    raise ModuleNotFoundError(
+        "Could not locate the Daikin-FSC code folder before importing config. "
+        "Use /content/Daikin-FSC or run colab_run.py instead."
+    )
+
+
+_bootstrap_before_imports()
+
+from config import INPUT_DIR, bootstrap_sys_path
+
+bootstrap_sys_path()
 
 from fsc_calculator import (
     calculate_fsc_from_processed_file,
