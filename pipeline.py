@@ -48,7 +48,7 @@ def _bootstrap_before_imports() -> None:
 
 _bootstrap_before_imports()
 
-from config import INPUT_DIR, bootstrap_sys_path
+from config import INPUT_DIR, bootstrap_sys_path, is_jupyter_kernel_argv, is_notebook_environment
 
 bootstrap_sys_path()
 
@@ -203,7 +203,25 @@ def run_pipeline(
     )
 
 
-def parse_args() -> argparse.Namespace:
+def default_cli_args() -> argparse.Namespace:
+    return argparse.Namespace(
+        input=None,
+        folder=False,
+        month=None,
+        basis=None,
+        rate_card=None,
+        processing_dir=None,
+        output_dir=None,
+    )
+
+
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
+    if argv is None:
+        argv = sys.argv[1:]
+
+    if not argv or is_jupyter_kernel_argv(argv):
+        return default_cli_args()
+
     parser = argparse.ArgumentParser(
         description="Run the Daikin FSC Matrix pipeline end to end.",
     )
@@ -241,7 +259,7 @@ def parse_args() -> argparse.Namespace:
         type=Path,
         help="Folder where final FSC files will be saved.",
     )
-    return parser.parse_args()
+    return parser.parse_args(argv)
 
 
 def main() -> None:
@@ -280,4 +298,7 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    if is_notebook_environment():
+        run_pipeline()
+    else:
+        main()
