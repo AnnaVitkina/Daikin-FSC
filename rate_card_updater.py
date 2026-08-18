@@ -38,6 +38,87 @@ DEDICATED_SEA_PATTERN = re.compile(
 )
 FSC_OUTPUT_NAME_PATTERN = re.compile(r"^(?P<name>.+)_prices_\d{2}_\d{4}_fsc$", re.IGNORECASE)
 
+PERIOD_FIRST = "first"
+PERIOD_SECOND = "second"
+PERIOD_BOTH = "both"
+
+
+def choose_rate_card_period() -> set[str]:
+    """Ask which half-month period(s) to include in the rate card result."""
+    print("\nWhich rate card period do you want in the result?")
+    print("  1. 01 to 15")
+    print("  2. 16 to last day of month")
+    print("  3. Both")
+
+    choices = {
+        "1": {PERIOD_FIRST},
+        "2": {PERIOD_SECOND},
+        "3": {PERIOD_FIRST, PERIOD_SECOND},
+    }
+
+    while True:
+        choice = input("Enter choice (1, 2, or 3): ").strip()
+        if choice in choices:
+            return choices[choice]
+        print("Please enter 1, 2, or 3.")
+
+
+def parse_rate_card_period(value: str) -> set[str]:
+    normalized = value.strip().casefold().replace("_", "-")
+    mapping = {
+        "first": {PERIOD_FIRST},
+        "1-15": {PERIOD_FIRST},
+        "01-15": {PERIOD_FIRST},
+        PERIOD_SECOND: {PERIOD_SECOND},
+        "16-end": {PERIOD_SECOND},
+        "16-last": {PERIOD_SECOND},
+        PERIOD_BOTH: {PERIOD_FIRST, PERIOD_SECOND},
+        "all": {PERIOD_FIRST, PERIOD_SECOND},
+    }
+    if normalized not in mapping:
+        raise ValueError(
+            "Period must be one of: first, second, both, 1-15, 16-end"
+        )
+    return mapping[normalized]
+
+
+def resolve_lane_target_half(
+    *,
+    valid_from: date | None,
+    lane_row_count: int,
+    available_halves: list[str],
+    period_halves: set[str],
+) -> str | None:
+    """Pick which FSC half applies to one lane row for the selected period(s)."""
+    selected_available = [half for half in available_halves if half in period_halves]
+    if not selected_available:
+        return None
+
+    if valid_from:
+        row_half = period_half_from_valid_from(valid_from)
+        if row_half in period_halves and row_half in available_halves:
+            return row_half
+
+    if lane_row_count == 1 and len(selected_available) == 1:
+        return selected_available[0]
+
+    return None
+
+
+def should_duplicate_second_half_row(
+    *,
+    lane_row_count: int,
+    available_halves: list[str],
+    period_halves: set[str],
+) -> bool:
+    if lane_row_count != 1:
+        return False
+
+    if PERIOD_FIRST not in period_halves or PERIOD_SECOND not in period_halves:
+        return False
+
+    return PERIOD_FIRST in available_halves and PERIOD_SECOND in available_halves
+
 
 def list_fsc_output_files(output_dir: Path | None = None) -> list[Path]:
     folder = output_dir or OUTPUT_DIR
@@ -367,8 +448,12 @@ def update_worksheet_lanes(
     fsc_lookup: dict[tuple[str, str], float],
     month: int,
     year: int,
+    period_halves: set[str] | None = None,
 ) -> int:
     """Update all lane sections in one worksheet."""
+    if period_halves is None:
+        period_halves = {PERIOD_FIRST, PERIOD_SECOND}
+
     header_rows = find_lane_header_rows(worksheet)
     updated_rows = 0
 
@@ -402,18 +487,15 @@ def update_worksheet_lanes(
                     continue
 
                 lane_rows = list(sea_rows)
-                has_second_half = any(
-                    period_half_from_valid_from(parsed) == "second"
-                    for lane_row in lane_rows
-                    if (parsed := parse_excel_date(
-                        worksheet.cell(lane_row, COL_VALID_FROM).value
-                    ))
-                )
-                if not has_second_half:
+                if should_duplicate_second_half_row(
+                    lane_row_count=len(lane_rows),
+                    available_halves=[PERIOD_FIRST, PERIOD_SECOND],
+                    period_halves=period_halves,
+                ):
                     new_row = next_header
                     worksheet.insert_rows(new_row)
                     duplicate_lane_row(worksheet, lane_rows[0], new_row)
-                    second_from, second_to = period_bounds(year, month, "second")
+                    second_from, second_to = period_bounds(year, month, PERIOD_SECOND)
                     worksheet.cell(new_row, COL_VALID_FROM, format_excel_date(second_from))
                     worksheet.cell(new_row, COL_VALID_TO, format_excel_date(second_to))
                     lane_rows.append(new_row)
@@ -423,11 +505,15 @@ def update_worksheet_lanes(
                     valid_from = parse_excel_date(
                         worksheet.cell(lane_row, COL_VALID_FROM).value
                     )
-                    half = (
-                        period_half_from_valid_from(valid_from)
-                        if valid_from
-                        else "first"
+                    half = resolve_lane_target_half(
+                        valid_from=valid_from,
+                        lane_row_count=len(lane_rows),
+                        available_halves=[PERIOD_FIRST, PERIOD_SECOND],
+                        period_halves=period_halves,
                     )
+                    if half is None:
+                        continue
+
                     period_from, period_to = period_bounds(year, month, half)
                     update_lane_row(
                         worksheet,
@@ -445,16 +531,22 @@ def update_worksheet_lanes(
 
             lane_rows = [row_index]
             available_halves = [
-                half for half in ("first", "second") if (country, half) in fsc_lookup
+                half
+                for half in (PERIOD_FIRST, PERIOD_SECOND)
+                if (country, half) in fsc_lookup
             ]
             if not available_halves:
                 continue
 
-            if len(available_halves) == 2 and len(lane_rows) == 1:
+            if should_duplicate_second_half_row(
+                lane_row_count=len(lane_rows),
+                available_halves=available_halves,
+                period_halves=period_halves,
+            ):
                 new_row = next_header
                 worksheet.insert_rows(new_row)
                 duplicate_lane_row(worksheet, lane_rows[0], new_row)
-                second_from, second_to = period_bounds(year, month, "second")
+                second_from, second_to = period_bounds(year, month, PERIOD_SECOND)
                 worksheet.cell(new_row, COL_VALID_FROM, format_excel_date(second_from))
                 worksheet.cell(new_row, COL_VALID_TO, format_excel_date(second_to))
                 lane_rows.append(new_row)
@@ -464,12 +556,13 @@ def update_worksheet_lanes(
                 valid_from = parse_excel_date(
                     worksheet.cell(lane_row, COL_VALID_FROM).value
                 )
-                half = (
-                    period_half_from_valid_from(valid_from)
-                    if valid_from
-                    else "first"
+                half = resolve_lane_target_half(
+                    valid_from=valid_from,
+                    lane_row_count=len(lane_rows),
+                    available_halves=available_halves,
+                    period_halves=period_halves,
                 )
-                if (country, half) not in fsc_lookup:
+                if half is None or (country, half) not in fsc_lookup:
                     continue
 
                 period_from, period_to = period_bounds(year, month, half)
@@ -490,6 +583,7 @@ def update_rate_card_export(
     rate_card_path: Path | None = None,
     fsc_input_path: Path | None = None,
     output_dir: Path | None = None,
+    period_halves: set[str] | None = None,
 ) -> tuple[Path, int, dict[str, int]]:
     """Update % over cost values in a copy of the rate card export."""
     source_rate_card = rate_card_path or find_rate_card_export()
@@ -516,6 +610,7 @@ def update_rate_card_export(
             fsc_lookup=fsc_lookup,
             month=month,
             year=year,
+            period_halves=period_halves,
         )
         updates_by_sheet[worksheet.title] = sheet_updates
         updated_rows += sheet_updates
@@ -533,18 +628,27 @@ def run_rate_card_updater(
     rate_card_path: Path | None = None,
     fsc_input_path: Path | None = None,
     output_dir: Path | None = None,
+    period_halves: set[str] | None = None,
 ) -> tuple[Path, int, dict[str, int]]:
     selected_fsc_output = fsc_output_path or choose_fsc_output_file()
     source_rate_card = rate_card_path or find_rate_card_export()
+    selected_periods = period_halves or choose_rate_card_period()
 
     print(f"\nUsing FSC output:     {selected_fsc_output.name}")
     print(f"Using rate card:      {source_rate_card.name}")
+    if selected_periods == {PERIOD_FIRST}:
+        print("Rate card period:     01 to 15")
+    elif selected_periods == {PERIOD_SECOND}:
+        print("Rate card period:     16 to last day of month")
+    else:
+        print("Rate card period:     Both halves")
 
     output_path, updated_rows, updates_by_sheet = update_rate_card_export(
         fsc_output_path=selected_fsc_output,
         rate_card_path=source_rate_card,
         fsc_input_path=fsc_input_path,
         output_dir=output_dir,
+        period_halves=selected_periods,
     )
 
     print(f"Updated rows:         {updated_rows}")
@@ -576,16 +680,23 @@ def parse_args() -> argparse.Namespace:
         type=Path,
         help="Folder where the updated rate card will be saved.",
     )
+    parser.add_argument(
+        "--period",
+        choices=("first", "second", "both"),
+        help="Rate card period to update: first (01-15), second (16-end), or both.",
+    )
     return parser.parse_args()
 
 
 def main() -> None:
     args = parse_args()
+    period_halves = parse_rate_card_period(args.period) if args.period else None
     run_rate_card_updater(
         fsc_output_path=args.fsc_output,
         rate_card_path=args.rate_card,
         fsc_input_path=args.fsc_input,
         output_dir=args.output_dir,
+        period_halves=period_halves,
     )
 
 
