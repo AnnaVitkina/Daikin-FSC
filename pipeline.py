@@ -121,7 +121,7 @@ def run_pipeline(
 
         print("\nSTEP 3/3: Update Rate card export")
         print("-" * 60)
-        rate_card_output, updated_rows = update_rate_card_export(
+        rate_card_output, updated_rows, updates_by_sheet = update_rate_card_export(
             fsc_output_path=fsc_output,
             rate_card_path=rate_card_file,
             fsc_input_path=fsc_input,
