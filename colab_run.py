@@ -81,7 +81,12 @@ mount_drive_if_needed()
 CODE_DIR = find_code_dir()
 sys.path.insert(0, str(CODE_DIR))
 
-from config import WORKSPACE_ROOT, bootstrap_sys_path, ensure_workspace_dirs
+from config import WORKSPACE_ROOT, ensure_workspace_dirs
+
+try:
+    from config import bootstrap_sys_path
+except ImportError:
+    from config import setup_paths as bootstrap_sys_path
 
 bootstrap_sys_path(CODE_DIR)
 install_dependencies()
