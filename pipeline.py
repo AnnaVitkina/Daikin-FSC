@@ -48,7 +48,34 @@ def _bootstrap_before_imports() -> None:
 
 _bootstrap_before_imports()
 
-from config import INPUT_DIR, bootstrap_sys_path, is_jupyter_kernel_argv, is_notebook_environment
+
+def is_notebook_environment() -> bool:
+    try:
+        import google.colab  # noqa: F401
+
+        return True
+    except ImportError:
+        pass
+
+    try:
+        from IPython import get_ipython
+
+        return get_ipython() is not None
+    except ImportError:
+        return False
+
+
+def is_jupyter_kernel_argv(argv: list[str] | None = None) -> bool:
+    args = argv if argv is not None else sys.argv[1:]
+    return len(args) >= 2 and args[0] in {"-f", "-F"} and args[1].endswith(".json")
+
+
+from config import INPUT_DIR
+
+try:
+    from config import bootstrap_sys_path
+except ImportError:
+    from config import setup_paths as bootstrap_sys_path
 
 bootstrap_sys_path()
 
