@@ -20,6 +20,25 @@ def is_colab() -> bool:
         return False
 
 
+def is_notebook_environment() -> bool:
+    """Return True when running inside Jupyter, Colab, or IPython."""
+    if is_colab():
+        return True
+
+    try:
+        from IPython import get_ipython
+
+        return get_ipython() is not None
+    except ImportError:
+        return False
+
+
+def is_jupyter_kernel_argv(argv: list[str] | None = None) -> bool:
+    """Detect Jupyter/Colab kernel arguments injected into sys.argv."""
+    args = argv if argv is not None else sys.argv[1:]
+    return len(args) >= 2 and args[0] in {"-f", "-F"} and args[1].endswith(".json")
+
+
 def find_code_dir() -> Path:
     """Locate the folder that contains the Daikin-FSC Python modules."""
     candidates: list[Path] = []
